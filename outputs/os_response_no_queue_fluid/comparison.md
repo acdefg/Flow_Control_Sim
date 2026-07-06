@@ -1,0 +1,20 @@
+| 指标 | 无流控 | NOC Watermark | Sender Outstanding | Smith PI |
+| --- | ---: | ---: | ---: | ---: |
+| 最大 Sender Outstanding | 413.455 | 77.545 | 96 | 81.822 |
+| 最大 NOC Outstanding | 386.182 | 67.727 | 87 | 72.444 |
+| 最大 Queue | 358.909 | 58.727 | 77.636 | 63.08 |
+| 最大 NOC Queue | 0 | 0 | 0 | 0 |
+| 最大 Sender-NOC Inflight | 28.636 | 28.636 | 28.636 | 28.636 |
+| 最大物理前向 Inflight | 13.636 | 13.636 | 13.636 | 13.636 |
+| Sender Overshoot | 317.455 | 0 | 0 | 0 |
+| NOC Overshoot | 330.182 | 11.727 | 31 | 16.444 |
+| Throughput | 2.781 | 2.709 | 2.725 | 2.717 |
+| Throughput Req/Cycle | 0.0869 | 0.0847 | 0.0852 | 0.0849 |
+| 平均命令带宽 | 2.909 | 2.724 | 2.74 | 2.731 |
+| 最小正命令带宽 | 2.909 | 2.909 | 2.909 | 0.8663 |
+| 最大 Burst Period | 176 | 176 | 176 | 591 |
+| Sender Settling Time | 46316 | 2636 | 13004 | 7500 |
+| NOC Settling Time | 46806 | 3190 | 13558 | 8054 |
+| Send Rate <= Receiver Time | 6000 | 786 | 6000 | 973 |
+| Idle Ratio | 0 | 0.0636 | 0.0582 | 0 |
+| Sender Backpressure Ratio | 0 | 0 | 0 | 0 |

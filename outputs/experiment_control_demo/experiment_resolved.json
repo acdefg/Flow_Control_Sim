@@ -1,0 +1,79 @@
+{
+  "name": "control_demo",
+  "output_dir": "experiments\\..\\outputs\\experiment_control_demo",
+  "simulation": {
+    "total_cycles": 12000,
+    "max_send_rate": 3.0,
+    "sender_threshold": 96.0,
+    "noc_threshold": 56.0,
+    "queue_capacity": null,
+    "delays": {
+      "forward_sn": 150,
+      "forward_nr": 150,
+      "return_rn": 150,
+      "return_ns": 150,
+      "throttle": 44
+    },
+    "traffic": {
+      "request_bytes": 32,
+      "sender_burst_reqs": 16,
+      "sender_check_interval": 44,
+      "sender_burst_period": 176,
+      "noc_queue_capacity_reqs": 128,
+      "sender_noc_inflight_capacity_reqs": 256,
+      "noc_issue_reqs_per_cycle": 1,
+      "noc_queue_delay": 0,
+      "noc_queue_poll_period": 128
+    },
+    "service_profile": [
+      {
+        "start_cycle": 0,
+        "rate": 3.0
+      },
+      {
+        "start_cycle": 3000,
+        "rate": 1.0
+      }
+    ],
+    "settling_window": 100,
+    "settling_tail_window": 200,
+    "settling_rel_tolerance": 0.05,
+    "settling_abs_tolerance": 1.0,
+    "oscillation_window": 500
+  },
+  "controllers": [
+    {
+      "kind": "noc",
+      "label": "方案一（NOC Watermark）",
+      "params": {}
+    },
+    {
+      "kind": "sender",
+      "label": "方案二（Sender Outstanding）",
+      "params": {}
+    },
+    {
+      "kind": "smith_pi",
+      "label": "方案三（Smith PI）",
+      "params": {
+        "signal": "sender_or_delayed_noc_error",
+        "threshold": 0,
+        "sender_threshold": 96,
+        "noc_threshold": 56,
+        "kp": 40,
+        "kd": 0,
+        "prediction_delay": 44,
+        "feedback_delay": 44,
+        "measurement_filter_alpha": 0.1,
+        "error_deadband": 2,
+        "max_period_step": 64,
+        "min_period": 176,
+        "max_period": 4096
+      }
+    }
+  ],
+  "plots": {
+    "enabled": true,
+    "mode": "comparison"
+  }
+}
