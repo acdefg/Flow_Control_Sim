@@ -100,9 +100,10 @@ class ControllerTests(unittest.TestCase):
 
     def test_smith_pi_accepts_ks_alias_for_proportional_gain(self):
         config = SimulationConfig(total_cycles=1)
-        controller = build_controller("smith_pi", config, {"ks": 42, "kd": 9})
+        controller = build_controller("smith_pi", config, {"ks": 42, "ki": 0.5, "kd": 9})
 
         self.assertEqual(controller.kp, 42)
+        self.assertEqual(controller.ki, 0.5)
         self.assertEqual(controller.kd, 9)
 
     def test_smith_pi_can_use_delayed_noc_feedback_gap(self):
@@ -126,6 +127,26 @@ class ControllerTests(unittest.TestCase):
         self.assertGreater(first.burst_period, 176.0)
         self.assertGreater(second.burst_period, 176.0)
         self.assertEqual(third.burst_period, 176.0)
+
+    def test_smith_pi_can_target_delayed_noc_outstanding(self):
+        controller = SmithPIBurstPeriodController(
+            threshold=10,
+            max_send_rate=3.0,
+            base_period=176,
+            kp=10,
+            kd=0,
+            prediction_delay=0,
+            feedback_delay=2,
+            signal="delayed_noc_outstanding",
+        )
+
+        first = controller.update(self.State(noc_outstanding=20))
+        second = controller.update(self.State(noc_outstanding=20))
+        third = controller.update(self.State(noc_outstanding=20))
+
+        self.assertEqual(first.burst_period, 176.0)
+        self.assertEqual(second.burst_period, 176.0)
+        self.assertGreater(third.burst_period, 176.0)
 
     def test_smith_pi_combines_sender_and_delayed_noc_waterlines(self):
         controller = SmithPIBurstPeriodController(
@@ -170,6 +191,29 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(baseline.burst_period, 176.0)
         self.assertEqual(first_step.burst_period, 186.0)
         self.assertEqual(second_step.burst_period, 196.0)
+
+    def test_smith_pi_integral_accumulates_and_unwinds(self):
+        controller = SmithPIBurstPeriodController(
+            threshold=10,
+            max_send_rate=3.0,
+            base_period=176,
+            kp=0,
+            ki=2,
+            kd=0,
+            prediction_delay=0,
+            signal="noc_outstanding",
+            integral_limit=20,
+        )
+
+        first_high = controller.update(self.State(noc_outstanding=15))
+        second_high = controller.update(self.State(noc_outstanding=15))
+        third_high = controller.update(self.State(noc_outstanding=15))
+        below_target = controller.update(self.State(noc_outstanding=5))
+
+        self.assertEqual(first_high.burst_period, 186.0)
+        self.assertEqual(second_high.burst_period, 196.0)
+        self.assertEqual(third_high.burst_period, 206.0)
+        self.assertEqual(below_target.burst_period, 196.0)
 
     def test_smith_pi_can_reset_filter_when_error_clears(self):
         controller = SmithPIBurstPeriodController(

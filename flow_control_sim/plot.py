@@ -11,7 +11,6 @@ from .metrics import SimulationHistory, read_history_csv
 
 PLOT_MAX_CYCLE = 30000
 LEGEND_FONT_SIZE = 8
-OS_GAP_SLOWDOWN_TARGET = 10.0
 
 
 @dataclass(frozen=True)
@@ -640,7 +639,10 @@ def plot_strategy_comparison(
 
     _apply_cycle_limit((ax_sender, ax_noc, ax_queue, ax_rate), histories[0].cycles, max_cycle=PLOT_MAX_CYCLE)
 
-    metrics = [compute_plot_metrics(history, label) for history, label in zip(histories, labels)]
+    metrics = [
+        compute_plot_metrics(history, label, noc_threshold=noc_threshold)
+        for history, label in zip(histories, labels)
+    ]
     _draw_metric_table(ax_table, metrics)
 
     fig.tight_layout()
@@ -668,7 +670,11 @@ def detect_events(history: SimulationHistory) -> PlotEvents:
     )
 
 
-def compute_plot_metrics(history: SimulationHistory, label: str) -> PlotMetrics:
+def compute_plot_metrics(
+    history: SimulationHistory,
+    label: str,
+    noc_threshold: Optional[float] = None,
+) -> PlotMetrics:
     events = detect_events(history)
     total_cycles = max(len(history), 1)
     idle_ratio = sum(1 for value in history.sent if value <= 1e-9) / total_cycles
@@ -687,22 +693,27 @@ def compute_plot_metrics(history: SimulationHistory, label: str) -> PlotMetrics:
         start_cycle=events.service_recover,
         end_cycle=None,
     )
-    slowdown_overshoot = _slowdown_undershoot(
-        cycles=history.cycles,
-        values=history.sender_noc_os_gap,
-        start_cycle=events.service_drop,
-        end_cycle=events.service_recover,
-        target=OS_GAP_SLOWDOWN_TARGET,
-    )
-    slowdown_settling = _settle_to_interval_min_time(
-        cycles=history.cycles,
-        values=history.sender_noc_os_gap,
-        start_cycle=events.service_drop,
-        end_cycle=events.service_recover,
-    )
+    if noc_threshold is None:
+        slowdown_overshoot = None
+        slowdown_settling = None
+    else:
+        slowdown_overshoot = _slowdown_overshoot_above_target(
+            cycles=history.cycles,
+            values=history.noc_outstanding,
+            start_cycle=events.service_drop,
+            end_cycle=events.service_recover,
+            target=noc_threshold,
+        )
+        slowdown_settling = _settle_below_target_after_peak_time(
+            cycles=history.cycles,
+            values=history.noc_outstanding,
+            start_cycle=events.service_drop,
+            end_cycle=events.service_recover,
+            target=noc_threshold,
+        )
     recovery_settling = _settle_to_tail_time(
         cycles=history.cycles,
-        values=history.sender_noc_os_gap,
+        values=history.noc_outstanding,
         start_cycle=events.service_recover,
         end_cycle=None,
     )
@@ -1185,7 +1196,7 @@ def _interval_average(
     return total / count
 
 
-def _slowdown_undershoot(
+def _slowdown_overshoot_above_target(
     cycles: Sequence[int],
     values: Sequence[float],
     start_cycle: Optional[int],
@@ -1201,14 +1212,15 @@ def _slowdown_undershoot(
     ]
     if not interval_values:
         return None
-    return max(0.0, target - min(interval_values))
+    return max(0.0, max(interval_values) - target)
 
 
-def _settle_to_interval_min_time(
+def _settle_below_target_after_peak_time(
     cycles: Sequence[int],
     values: Sequence[float],
     start_cycle: Optional[int],
     end_cycle: Optional[int],
+    target: float,
     tolerance_ratio: float = 0.02,
 ) -> Optional[int]:
     if start_cycle is None or not cycles or not values:
@@ -1220,11 +1232,14 @@ def _settle_to_interval_min_time(
     ]
     if len(samples) < 2:
         return None
-    target = min(value for _, value in samples)
     tolerance = max(0.5, abs(target) * tolerance_ratio)
+    limit = target + tolerance
+    peak_idx = max(range(len(samples)), key=lambda idx: samples[idx][1])
+    if samples[peak_idx][1] <= limit:
+        return 0
 
-    for cycle, value in samples:
-        if abs(value - target) <= tolerance:
+    for cycle, value in samples[peak_idx:]:
+        if value <= limit:
             return cycle - start_cycle
     return None
 

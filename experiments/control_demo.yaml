@@ -37,18 +37,18 @@ simulation:
 
 controllers:
   - kind: noc
-    label: 方案一（NOC Watermark）
+    label: NOC Watermark
   - kind: sender
-    label: 方案二（Sender Outstanding）
+    label: Sender Outstanding
   - kind: smith_pi
-    label: 方案三（Smith PI）
+    label: Smith PI
     params:
-      signal: sender_or_delayed_noc_error
-      threshold: 0
-      sender_threshold: 96
-      noc_threshold: 56
+      signal: delayed_noc_outstanding
+      threshold: 56
       kp: 28
+      ki: 0.02
       kd: 0
+      integral_limit: 1000
       prediction_delay: 44
       feedback_delay: 44
       measurement_filter_alpha: 0.1

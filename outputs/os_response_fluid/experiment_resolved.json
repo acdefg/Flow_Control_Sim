@@ -49,7 +49,7 @@
   "controllers": [
     {
       "kind": "open",
-      "label": "无流控",
+      "label": "No Control",
       "params": {}
     },
     {
@@ -66,12 +66,12 @@
       "kind": "smith_pi",
       "label": "Smith PI",
       "params": {
-        "signal": "sender_or_delayed_noc_error",
-        "threshold": 0,
-        "sender_threshold": 96,
-        "noc_threshold": 56,
+        "signal": "delayed_noc_outstanding",
+        "threshold": 56,
         "kp": 28,
+        "ki": 0.02,
         "kd": 0,
+        "integral_limit": 1000,
         "prediction_delay": 44,
         "feedback_delay": 44,
         "measurement_filter_alpha": 0.1,

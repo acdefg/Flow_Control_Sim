@@ -9,6 +9,7 @@ from typing import Any, Deque, Mapping, Optional, Protocol
 from .config import SimulationConfig
 
 DEFAULT_SMITH_KP = 40.0
+DEFAULT_SMITH_KI = 0.0
 DEFAULT_SMITH_KD = 0.0
 
 
@@ -162,7 +163,10 @@ class SmithPIBurstPeriodController:
 
     and the commanded burst period is:
 
-        T(k) = base_period + kp * (z_hat(k) - A)
+        I(k) = clamp(I(k - 1) + deadband(z_hat(k) - A))
+
+        T(k) = base_period + kp * max(0, deadband(z_hat(k) - A))
+               + ki * I(k)
                + kd * (z_hat(k) - z_hat(k - 1))
 
     ``T`` is clamped so the sender never exceeds the configured maximum
@@ -175,6 +179,7 @@ class SmithPIBurstPeriodController:
         "receiver_queue",
         "noc_queue",
         "sender_noc_inflight",
+        "delayed_noc_outstanding",
         "sender_delayed_noc_gap",
         "sender_or_delayed_noc_error",
     }
@@ -185,11 +190,13 @@ class SmithPIBurstPeriodController:
         max_send_rate: float,
         base_period: int,
         kp: float = DEFAULT_SMITH_KP,
+        ki: float = DEFAULT_SMITH_KI,
         kd: float = DEFAULT_SMITH_KD,
         prediction_delay: int = 40,
         feedback_delay: int = 44,
         min_period: Optional[int] = None,
         max_period: Optional[int] = None,
+        integral_limit: Optional[float] = None,
         signal: str = "sender_outstanding",
         sender_threshold: Optional[float] = None,
         noc_threshold: Optional[float] = None,
@@ -206,10 +213,14 @@ class SmithPIBurstPeriodController:
             raise ValueError("prediction_delay must be >= 0")
         if feedback_delay < 0:
             raise ValueError("feedback_delay must be >= 0")
+        if ki < 0:
+            raise ValueError("ki must be >= 0")
         if not 0.0 < measurement_filter_alpha <= 1.0:
             raise ValueError("measurement_filter_alpha must be in (0, 1]")
         if error_deadband < 0:
             raise ValueError("error_deadband must be >= 0")
+        if integral_limit is not None and integral_limit <= 0:
+            raise ValueError("integral_limit must be > 0 when set")
         if max_period_step is not None and max_period_step <= 0:
             raise ValueError("max_period_step must be > 0 when set")
         if signal not in self.SUPPORTED_SIGNALS:
@@ -218,6 +229,7 @@ class SmithPIBurstPeriodController:
         self.max_send_rate = max_send_rate
         self.base_period = base_period
         self.kp = kp
+        self.ki = ki
         self.kd = kd
         self.prediction_delay = prediction_delay
         self.feedback_delay = feedback_delay
@@ -234,14 +246,18 @@ class SmithPIBurstPeriodController:
             raise ValueError("min_period must be > 0")
         if self.max_period < self.min_period:
             raise ValueError("max_period must be >= min_period")
+        if integral_limit is None and ki > 0:
+            integral_limit = (float(self.max_period) - float(self.min_period)) / ki
+        self.integral_limit = integral_limit
         self.name = (
-            f"smith_pi_{signal}_A{threshold:g}_P{kp:g}_D{kd:g}_pred{prediction_delay:g}"
+            f"smith_pi_{signal}_A{threshold:g}_P{kp:g}_I{ki:g}_D{kd:g}_pred{prediction_delay:g}"
         )
         self._history: Deque[float] = deque([0.0] * prediction_delay)
         self._noc_feedback_delay: Deque[float] = deque([0.0] * feedback_delay)
         self._prev_z_hat: Optional[float] = None
         self._filtered_measurement: Optional[float] = None
         self._prev_period: Optional[float] = None
+        self._integral_error = 0.0
 
     def reset(self) -> None:
         self._history = deque([0.0] * self.prediction_delay)
@@ -249,6 +265,7 @@ class SmithPIBurstPeriodController:
         self._prev_z_hat = None
         self._filtered_measurement = None
         self._prev_period = None
+        self._integral_error = 0.0
 
     def update(self, state: StateView) -> ControlDecision:
         measured = self._filtered_measure(self._measure(state))
@@ -262,15 +279,17 @@ class SmithPIBurstPeriodController:
         delta_z = 0.0 if self._prev_z_hat is None else z_hat - self._prev_z_hat
         self._prev_z_hat = z_hat
 
-        error = z_hat - self.threshold
-        if error <= self.error_deadband:
-            error = 0.0
-            effective_delta_z = 0.0
-        else:
-            error -= self.error_deadband
-            effective_delta_z = delta_z
+        signed_error = self._apply_deadband(z_hat - self.threshold)
+        proportional_error = max(0.0, signed_error)
+        effective_delta_z = delta_z if proportional_error > 0.0 else 0.0
+        self._integral_error = self._clamp_integral(self._integral_error + signed_error)
 
-        period = self.base_period + self.kp * error + self.kd * effective_delta_z
+        period = (
+            self.base_period
+            + self.kp * proportional_error
+            + self.ki * self._integral_error
+            + self.kd * effective_delta_z
+        )
         period = max(float(self.min_period), min(float(self.max_period), period))
         if self.max_period_step is not None and self._prev_period is not None:
             lower = self._prev_period - self.max_period_step
@@ -288,6 +307,8 @@ class SmithPIBurstPeriodController:
 
     def _measure(self, state: StateView) -> float:
         if self.signal != "sender_delayed_noc_gap":
+            if self.signal == "delayed_noc_outstanding":
+                return self._delayed_noc(state)
             if self.signal == "sender_or_delayed_noc_error":
                 delayed_noc = self._delayed_noc(state)
                 sender_limit = (
@@ -321,6 +342,18 @@ class SmithPIBurstPeriodController:
             alpha = self.measurement_filter_alpha
             self._filtered_measurement = alpha * measured + (1.0 - alpha) * self._filtered_measurement
         return self._filtered_measurement
+
+    def _apply_deadband(self, error: float) -> float:
+        if error > self.error_deadband:
+            return error - self.error_deadband
+        if error < -self.error_deadband:
+            return error + self.error_deadband
+        return 0.0
+
+    def _clamp_integral(self, value: float) -> float:
+        if self.integral_limit is None:
+            return value
+        return max(-self.integral_limit, min(self.integral_limit, value))
 
 
 def build_controller(
@@ -367,11 +400,13 @@ def build_controller(
             max_send_rate=config.max_send_rate,
             base_period=_int_param(params, "base_period", config.traffic.sender_burst_period),
             kp=_float_param(params, "kp", kp_default),
+            ki=_float_param(params, "ki", DEFAULT_SMITH_KI),
             kd=_float_param(params, "kd", DEFAULT_SMITH_KD),
             prediction_delay=_int_param(params, "prediction_delay", 40),
             feedback_delay=_int_param(params, "feedback_delay", config.delays.throttle),
             min_period=_optional_int_param(params, "min_period", config.traffic.sender_burst_period),
             max_period=_optional_int_param(params, "max_period", config.traffic.sender_burst_period * 64),
+            integral_limit=_optional_float_param(params, "integral_limit", None),
             signal=signal,
             sender_threshold=_optional_float_param(params, "sender_threshold", config.sender_threshold),
             noc_threshold=_optional_float_param(params, "noc_threshold", config.noc_threshold),
